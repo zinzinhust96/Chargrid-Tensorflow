@@ -29,16 +29,27 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
+import multiprocessing
 
 ## Hyperparameters
-dir_np_chargrid = "./data/np_chargrids/"
-dir_np_gt = "./data/np_gt/"
-dir_pd_bbox = "./data/pd_bbox/"
-outdir_np_chargrid_reduced = "./data/np_chargrids_reduced/"
-outdir_png_chargrid_reduced = "./data/img_chargrids_reduced/"
-outdir_np_gt_reduced = "./data/np_gt_reduced/"
-outdir_png_gt_reduced = "./data/img_gt_reduced/"
-outdir_pd_bbox_reduced = "./data/pd_bbox_reduced/"
+dir_np_chargrid = "./data/output/np_chargrids/"
+dir_np_gt = "./data/output/np_gt/"
+dir_pd_bbox = "./data/output/pd_bbox/"
+outdir_np_chargrid_reduced = "./data/output_bis/np_chargrids_reduced/"
+outdir_png_chargrid_reduced = "./data/output_bis/img_chargrids_reduced/"
+outdir_np_gt_reduced = "./data/output_bis/np_gt_reduced/"
+outdir_png_gt_reduced = "./data/output_bis/img_gt_reduced/"
+outdir_pd_bbox_reduced = "./data/output_bis/pd_bbox_reduced/"
+if not os.path.exists(outdir_np_chargrid_reduced):
+    os.makedirs(outdir_np_chargrid_reduced)
+if not os.path.exists(outdir_png_chargrid_reduced):
+    os.makedirs(outdir_png_chargrid_reduced)
+if not os.path.exists(outdir_np_gt_reduced):
+    os.makedirs(outdir_np_gt_reduced)
+if not os.path.exists(outdir_png_gt_reduced):
+    os.makedirs(outdir_png_gt_reduced)
+if not os.path.exists(outdir_pd_bbox_reduced):
+    os.makedirs(outdir_pd_bbox_reduced)
 equal_threshold = 0.95
 max_padding = 3
 
@@ -90,17 +101,17 @@ def get_img_reduced(img, reduce_x, reduce_y, padding_left, padding_right, paddin
     for i in range(0, padding_top):
         img2 = np.insert(img2, 0, 0, axis=0)
     for i in range(0, padding_bot):
-        img2 = np.insert(img2, 0, img2.shape[0], axis=0)
+        img2 = np.insert(img2, img2.shape[0], 0, axis=0)
     for i in range(0, padding_left):
         img2 = np.insert(img2, 0, 0, axis=1)
     for i in range(0, padding_right):
-        img2 = np.insert(img2, 0, img2.shape[1], axis=1)
+        img2 = np.insert(img2, img2.shape[1], 0, axis=1)
     
     img2_reshaped = img2.reshape(img2.shape[0]//reduce_y, -1, img2.shape[1])
-    img2 = np.apply_along_axis(lambda x: np.bincount(x).argmax(), axis=1, arr=img2_reshaped)
+    img2 = np.apply_along_axis(lambda x: np.bincount(x).argmax(), axis=1, arr=img2_reshaped)    # find most frequent pixel value
     
     img2_reshaped = img2.reshape(img2.shape[0], img2.shape[1]//reduce_x, -1)
-    img2 = np.apply_along_axis(lambda x: np.bincount(x).argmax(), axis=2, arr=img2_reshaped)
+    img2 = np.apply_along_axis(lambda x: np.bincount(x).argmax(), axis=2, arr=img2_reshaped)    # find most frequent pixel value
     
     return img2
 
@@ -136,40 +147,45 @@ def plot_compare(input, output, reduce_x, reduce_y):
     plt.show()
     plt.clf()
 
+def process(filename):
+    ## Load inputs
+    img = np.load(os.path.join(dir_np_chargrid, filename), allow_pickle=True)
+    gt = np.load(os.path.join(dir_np_gt, filename))
+    pd_bbox = pd.read_pickle(os.path.join(dir_pd_bbox, filename).replace("npy", "pkl"))
+    
+    if np.shape(img) != (0, 0):
+        reduce_y, padding_top, padding_bot = get_max_reduce(img, 0)
+        print("final reduce_y = ", reduce_y, "padding_t = ", padding_top, "padding_b = ", padding_bot, filename)
+        
+        reduce_x, padding_left, padding_right = get_max_reduce(img, 1)
+        print("final reduce_x = ", reduce_x, "padding_l = ", padding_left, "padding_r = ", padding_right, filename)
+        
+        img2 = get_img_reduced(img, reduce_x, reduce_y, padding_left, padding_right, padding_top, padding_bot)
+        gt2 = get_img_reduced(gt, reduce_x, reduce_y, padding_left, padding_right, padding_top, padding_bot)
+        #plot_compare(img, img2, reduce_x, reduce_y)
+        #plot_compare(img, gt2, reduce_x, reduce_y)
+        
+        pd_bbox = reduce_pd_bbox(pd_bbox, padding_left, padding_top, reduce_x, reduce_y)
+        #print(pd_bbox)
+
+        ## Save        
+        np.save(os.path.join(outdir_np_chargrid_reduced, filename), img2)
+        np.save(os.path.join(outdir_np_gt_reduced, filename), gt2)
+        pd_bbox.to_pickle(os.path.join(outdir_pd_bbox_reduced, filename).replace("npy", "pkl"))
+
+        plt.imshow(img2)
+        plt.savefig(os.path.join(outdir_png_chargrid_reduced, filename).replace("npy", "png"))
+        plt.close()
+        
+        plt.imshow(gt2)
+        plt.savefig(os.path.join(outdir_png_gt_reduced, filename).replace("npy", "png"))
+        plt.close()
 
 if __name__ == "__main__":
-    list_filenames = [f for f in os.listdir(dir_np_chargrid) if os.path.isfile(os.path.join(dir_np_chargrid, f))]
+    list_filenames = [f for f in os.listdir(dir_np_chargrid) if os.path.isfile(os.path.join(dir_np_chargrid, f)) and f.endswith('.npy')]
     
-    for filename in list_filenames:
-        ## Load inputs
-        img = np.load(os.path.join(dir_np_chargrid, filename))
-        gt = np.load(os.path.join(dir_np_gt, filename))
-        pd_bbox = pd.read_pickle(os.path.join(dir_pd_bbox, filename).replace("npy", "pkl"))
-        
-        if np.shape(img) != (0, 0):
-            reduce_y, padding_top, padding_bot = get_max_reduce(img, 0)
-            print("final reduce_y = ", reduce_y, "padding_t = ", padding_top, "padding_b = ", padding_bot, filename)
-            
-            reduce_x, padding_left, padding_right = get_max_reduce(img, 1)
-            print("final reduce_x = ", reduce_x, "padding_l = ", padding_left, "padding_r = ", padding_right, filename)
-            
-            img2 = get_img_reduced(img, reduce_x, reduce_y, padding_left, padding_right, padding_top, padding_bot)
-            gt2 = get_img_reduced(gt, reduce_x, reduce_y, padding_left, padding_right, padding_top, padding_bot)
-            #plot_compare(img, img2, reduce_x, reduce_y)
-            #plot_compare(img, gt2, reduce_x, reduce_y)
-            
-            pd_bbox = reduce_pd_bbox(pd_bbox, padding_left, padding_top, reduce_x, reduce_y)
-            #print(pd_bbox)
-
-            ## Save        
-            np.save(os.path.join(outdir_np_chargrid_reduced, filename), img2)
-            np.save(os.path.join(outdir_np_gt_reduced, filename), gt2)
-            pd_bbox.to_pickle(os.path.join(outdir_pd_bbox_reduced, filename).replace("npy", "pkl"))
-
-            plt.imshow(img2)
-            plt.savefig(os.path.join(outdir_png_chargrid_reduced, filename).replace("npy", "png"))
-            plt.close()
-            
-            plt.imshow(gt2)
-            plt.savefig(os.path.join(outdir_png_gt_reduced, filename).replace("npy", "png"))
-            plt.close()
+    # creating a pool object 
+    p = multiprocessing.Pool(processes=10) 
+  
+    # map list to target function 
+    p.map(process, list_filenames)

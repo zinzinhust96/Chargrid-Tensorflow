@@ -40,17 +40,27 @@ import json
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-te.pytesseract.tesseract_cmd = 'C:\Program Files\Tesseract-OCR/tesseract'
+# te.pytesseract.tesseract_cmd = 'C:\Program Files\Tesseract-OCR/tesseract'
 
 ## Hyperparameters
-dir_img = "./data/img_inputs/"
-dir_boxes = "./data/gt_boxes/"
-dir_classes = "./data/gt_classes/"
-outdir_np_chargrid = "./data/np_chargrids/"
-outdir_png_chargrid = "./data/img_chargrids/"
-outdir_np_gt = "./data/np_gt/"
-outdir_png_gt = "./data/img_gt/"
-outdir_pd_bbox = "./data/pd_bbox/"
+dir_img = "./data/input/img_inputs/"
+dir_boxes = "./data/input/gt_boxes/"
+dir_classes = "./data/input/gt_classes/"
+outdir_np_chargrid = "./data/output/np_chargrids/"      # chargrid numpy files
+outdir_png_chargrid = "./data/output/img_chargrids/"    # visualize chargrid
+outdir_np_gt = "./data/output/np_gt/"                   # ground truth numpy files
+outdir_png_gt = "./data/output/img_gt/"                 # visualize ground truth
+outdir_pd_bbox = "./data/output/pd_bbox/"               # bounding box, class and text value of extracted information
+if not os.path.exists(outdir_np_chargrid):
+    os.makedirs(outdir_np_chargrid)
+if not os.path.exists(outdir_png_chargrid):
+    os.makedirs(outdir_png_chargrid)
+if not os.path.exists(outdir_np_gt):
+    os.makedirs(outdir_np_gt)
+if not os.path.exists(outdir_png_gt):
+    os.makedirs(outdir_png_gt)
+if not os.path.exists(outdir_pd_bbox):
+    os.makedirs(outdir_pd_bbox)
 tesseract_conf_threshold = 10
 cosine_similarity_threshold = 0.4
 list_classes = ["company", "date", "address", "total"]
@@ -62,6 +72,7 @@ def add_row_gt_pd(row, c, gt_pd):
             'top':row['top_left_y'],
             'right':row['bot_right_x'],
             'bot':row['bot_right_y'],
+            'value': row['text'],
             'class':c
             }, ignore_index = True)
 
@@ -167,7 +178,7 @@ def get_reduced_output(chargrid_pd, gt_pd, img_shape):
     
     for index, row in chargrid_pd.iterrows():
         chargrid_np[row['top']:row['top']+row['height'], row['left']:row['left']+row['width']] = row['ord']
-    
+
     gt_np = np.array([0]*img_shape[0]*img_shape[1]).reshape((img_shape[0], img_shape[1]))
     
     gt_pd.sort_values(by="class", ascending=True, inplace=True) #Sort by confidence
@@ -176,7 +187,7 @@ def get_reduced_output(chargrid_pd, gt_pd, img_shape):
     for index, row in gt_pd.iterrows():
         gt_np[row['top']:row['bot'], row['left']:row['right']] = row['class']
     
-    ## Remove empty rows and columns
+    ## reduce the size of images by removing empty rows and empty columns
     tab_cumsum_todelete_x = np.cumsum(np.all(chargrid_np == 0, axis=0))
     gt_pd['left'] -= tab_cumsum_todelete_x[gt_pd['left'].tolist()]
     gt_pd['right'] -= tab_cumsum_todelete_x[gt_pd['right'].tolist()]
@@ -189,7 +200,7 @@ def get_reduced_output(chargrid_pd, gt_pd, img_shape):
     gt_np = gt_np[~np.all(chargrid_np == 0, axis=1),:]
     
     chargrid_np = chargrid_np[:,~np.all(chargrid_np == 0, axis=0)]
-    chargrid_np = chargrid_np[~np.all(chargrid_np == 0, axis=1),:]
+    chargrid_np = chargrid_np[~np.all(chargrid_np == 0, axis=1),:]      # ~ : inverse of boolean
     
     return chargrid_np, gt_np, gt_pd
     
@@ -201,10 +212,10 @@ if __name__ == "__main__":
     
     for filename in list_filenames:
         dt, img_shape = extract_tesseract_information(filename)
+
+        chargrid_pd = get_chargrid(dt)      # chargrid_pd: bounding box and character index of all characters
         
-        chargrid_pd = get_chargrid(dt)
-        
-        gt_pd = extract_class_bounding_boxes(filename)
+        gt_pd = extract_class_bounding_boxes(filename)      # gt_pd: bounding box, class and value of extracted information
         
         chargrid_np, gt_np, gt_pd = get_reduced_output(chargrid_pd, gt_pd, img_shape)
         
@@ -213,8 +224,10 @@ if __name__ == "__main__":
         
         ##Saving
         np.save(os.path.join(outdir_np_chargrid, filename).replace("jpg", "npy"), chargrid_np)
+        # chargrid_pd.to_csv(os.path.join(outdir_np_chargrid, filename).replace("jpg", "csv"))
         np.save(os.path.join(outdir_np_gt, filename).replace("jpg", "npy"), gt_np)
         gt_pd.to_pickle(os.path.join(outdir_pd_bbox, filename).replace("jpg", "pkl"))
+        # gt_pd.to_csv(os.path.join(outdir_pd_bbox, filename).replace("jpg", "csv"))
         
         plt.imshow(chargrid_np)
         plt.savefig(os.path.join(outdir_png_chargrid, filename).replace("jpg", "png"))

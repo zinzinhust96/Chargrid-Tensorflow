@@ -35,15 +35,25 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import os
 from skimage.transform import resize
+import multiprocessing
 
 ## Hyperparameters
-dir_np_chargrid_reduced = "./data/np_chargrids_reduced/"
-dir_np_gt_reduced = "./data/np_gt_reduced/"
-dir_pd_bbox_reduced = "./data/pd_bbox_reduced/"
-outdir_np_chargrid_1h = "./data/np_chargrids_1h/"
-outdir_np_gt_1h = "./data/np_gt_1h/"
-outdir_np_bbox_anchor_mask = "./data/np_bbox_anchor_mask/"
-outdir_np_bbox_anchor_coord = "./data/np_bbox_anchor_coord/"
+dir_np_chargrid_reduced = "./data/output_bis/np_chargrids_reduced/"
+dir_np_gt_reduced = "./data/output_bis/np_gt_reduced/"
+dir_pd_bbox_reduced = "./data/output_bis/pd_bbox_reduced/"
+outdir_np_chargrid_1h = "./data/output_ter/np_chargrids_1h/"
+outdir_np_gt_1h = "./data/output_ter/np_gt_1h/"
+outdir_np_bbox_anchor_mask = "./data/output_ter/np_bbox_anchor_mask/"
+outdir_np_bbox_anchor_coord = "./data/output_ter/np_bbox_anchor_coord/"
+if not os.path.exists(outdir_np_chargrid_1h):
+    os.makedirs(outdir_np_chargrid_1h)
+if not os.path.exists(outdir_np_gt_1h):
+    os.makedirs(outdir_np_gt_1h)
+if not os.path.exists(outdir_np_bbox_anchor_mask):
+    os.makedirs(outdir_np_bbox_anchor_mask)
+if not os.path.exists(outdir_np_bbox_anchor_coord):
+    os.makedirs(outdir_np_bbox_anchor_coord)
+
 target_height = 256
 target_width = 128
 target_digit = 61
@@ -76,21 +86,26 @@ def print_stats_seg(tab_gt):
     print("prop_nb_class=", prop_nb_class, prop_nb_class/np.sum(prop_nb_class))
     print("prop_class=", prop_class, prop_class/np.sum(prop_class))
 
-def discard_digits_with_low_occurence(tab_img):
+def discard_digits_with_low_occurence(tab_img):     # ???
     nb_unique_digit, count_digit = np.unique(np.concatenate([img.flatten() for img in tab_img]), return_counts=True)
+    # print('nb_unique_digit: ', nb_unique_digit, count_digit)
     mask_digit_to_keep = count_digit>nb_digit_threshold
 
     new_digit_nb = np.cumsum(mask_digit_to_keep)
     new_digit_nb -= 1
+    # print('new_digit_nb: ', new_digit_nb)
     
     for i in range(1, len(new_digit_nb)):
         if new_digit_nb[len(new_digit_nb)-i] == new_digit_nb[len(new_digit_nb)-i-1]:
             new_digit_nb[len(new_digit_nb)-i] = target_digit-1
     
+    # print('new_digit_nb 2: ', new_digit_nb)
+    
     for i in range(0, len(tab_img)):
         for j in range(0, len(nb_unique_digit)):
             tab_img[i][tab_img[i] == nb_unique_digit[j]] = new_digit_nb[j]
     
+    # print('tab_img: ', tab_img)
     return tab_img
     
 def convert_to_1h(img, gt):
@@ -162,6 +177,38 @@ def plot_anchor(gt_1h, np_bbox_anchor_mask, np_bbox_anchor_coord):
     plt.show()
     plt.clf()
 
+def process(i):
+    print('leen: ', len(tab_img))
+    img_1h, gt_1h = convert_to_1h(tab_img[i], tab_gt[i])
+    #print(np.shape(img_1h))
+    #print(np.shape(gt_1h))
+    
+    img_1h, gt_1h = resize_to_target(img_1h, gt_1h)
+    print('img_1h: ', np.shape(img_1h))
+    plot_compare_input_1h(tab_img[i], img_1h)
+    print('gt_1h: ', np.shape(gt_1h))
+    plot_compare_input_1h(tab_gt[i], gt_1h)
+    
+    ## Load input
+    pd_bbox = pd.read_pickle(os.path.join(dir_pd_bbox_reduced, list_filenames[i]).replace("npy", "pkl"))
+    
+    np_bbox_anchor_mask = extract_anchor_mask(pd_bbox, np.shape(tab_img[i]))
+    # np_bbox_anchor_mask: (target_height, target_width, 2*nb_anchors)
+    # [0]: binary mask of first class, [1] inverse binary mask of first class (1-[0])
+    print(np.shape(np_bbox_anchor_mask))
+    
+    np_bbox_anchor_coord = extract_anchor_coordinates(pd_bbox, np.shape(tab_img[i]))
+    # np_bbox_anchor_coord: (target_height, target_width, 4*nb_anchors)
+    # [0]: mask with value = left coord of reduced img, [1] top, [2] right, [3] bottom
+    print(np.shape(np_bbox_anchor_coord))
+    
+    plot_anchor(gt_1h, np_bbox_anchor_mask, np_bbox_anchor_coord)
+
+    ## Save        
+    np.save(os.path.join(outdir_np_chargrid_1h, list_filenames[i]), img_1h)
+    np.save(os.path.join(outdir_np_gt_1h, list_filenames[i]), gt_1h)
+    np.save(os.path.join(outdir_np_bbox_anchor_coord, list_filenames[i]), np_bbox_anchor_coord)
+    np.save(os.path.join(outdir_np_bbox_anchor_mask, list_filenames[i]), np_bbox_anchor_mask)
 
 if __name__ == "__main__":
     list_filenames = [f for f in os.listdir(dir_np_chargrid_reduced) if os.path.isfile(os.path.join(dir_np_chargrid_reduced, f))]
@@ -180,31 +227,9 @@ if __name__ == "__main__":
     print_stats_seg(tab_gt)
     
     tab_img = discard_digits_with_low_occurence(tab_img)
-    
-    for i in range(0, len(list_filenames)):
-        img_1h, gt_1h = convert_to_1h(tab_img[i], tab_gt[i])
-        #print(np.shape(img_1h))
-        #print(np.shape(gt_1h))
-        
-        img_1h, gt_1h = resize_to_target(img_1h, gt_1h)
-        print(np.shape(img_1h))
-        plot_compare_input_1h(tab_img[i], img_1h)
-        print(np.shape(gt_1h))
-        plot_compare_input_1h(tab_gt[i], gt_1h)
-        
-        ## Load input
-        pd_bbox = pd.read_pickle(os.path.join(dir_pd_bbox_reduced, list_filenames[i]).replace("npy", "pkl"))
-        
-        np_bbox_anchor_mask = extract_anchor_mask(pd_bbox, np.shape(tab_img[i]))
-        print(np.shape(np_bbox_anchor_mask))
-        
-        np_bbox_anchor_coord = extract_anchor_coordinates(pd_bbox, np.shape(tab_img[i]))
-        print(np.shape(np_bbox_anchor_coord))
-        
-        plot_anchor(gt_1h, np_bbox_anchor_mask, np_bbox_anchor_coord)
 
-        ## Save        
-        np.save(os.path.join(outdir_np_chargrid_1h, list_filenames[i]), img_1h)
-        np.save(os.path.join(outdir_np_gt_1h, list_filenames[i]), gt_1h)
-        np.save(os.path.join(outdir_np_bbox_anchor_coord, list_filenames[i]), np_bbox_anchor_coord)
-        np.save(os.path.join(outdir_np_bbox_anchor_mask, list_filenames[i]), np_bbox_anchor_mask)
+    # creating a pool object 
+    p = multiprocessing.Pool(processes=6) 
+  
+    # map list to target function 
+    p.map(process, range(len(list_filenames)))

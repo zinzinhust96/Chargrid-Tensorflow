@@ -41,6 +41,13 @@ Several files are generated in the "./output/" folder :
 
 import numpy as np
 import tensorflow as tf
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
 from tensorflow.python.client import device_lib
 import matplotlib.pyplot as plt
 import os
@@ -48,10 +55,14 @@ import time
 from skimage.transform import resize, rescale
 
 ## Hyperparameters
-dir_np_chargrid_1h = "./data/np_chargrids_1h/"
-dir_np_gt_1h = "./data/np_gt_1h/"
-dir_np_bbox_anchor_mask = "./data/np_bbox_anchor_mask/"
-dir_np_bbox_anchor_coord = "./data/np_bbox_anchor_coord/"
+dir_np_chargrid_1h = "./data/output_ter/np_chargrids_1h/"
+dir_np_gt_1h = "./data/output_ter/np_gt_1h/"
+dir_np_bbox_anchor_mask = "./data/output_ter/np_bbox_anchor_mask/"
+dir_np_bbox_anchor_coord = "./data/output_ter/np_bbox_anchor_coord/"
+# dir_np_chargrid_1h = "./dummy_data/np_chargrids_1h/"
+# dir_np_gt_1h = "./dummy_data/np_gt_1h/"
+# dir_np_bbox_anchor_mask = "./dummy_data/np_bbox_anchor_mask/"
+# dir_np_bbox_anchor_coord = "./dummy_data/np_bbox_anchor_coord/"
 width = 128
 height = 256
 input_channels = 61
@@ -64,8 +75,8 @@ nb_classes = 5
 proba_classes = np.array([0.89096397, 0.01125766, 0.0504345, 0.03237164, 0.01497223]) #other, total, address, company, date
 constant_weight = 1.04
 nb_anchors = 4 # one per foreground class
-epochs = 10
-batch_size = 6
+epochs = 1000
+batch_size = 4
 prop_test = 0.2
 seed = 123456
 filename_backup = "./output/model.ckpt"
@@ -73,6 +84,9 @@ pad_left_range = 0.2
 pad_top_range = 0.2
 pad_right_range = 0.2
 pad_bot_range = 0.2
+
+if not os.path.exists('./output'):
+    os.makedirs('./output')
 
 np.random.seed(seed=seed)
 
@@ -603,6 +617,7 @@ if __name__ == "__main__":
     
     net.save_weights(filename_backup)
     
+    # TODO: move these into train() function
     ## Plot loss
     plot_loss(history_loss, history_val_loss, "Global Loss", "./output/global_loss.pdf")
     plot_loss(history_loss_output1, history_val_loss_output1, "Output 1 Loss", "./output/output_1_loss.pdf")
