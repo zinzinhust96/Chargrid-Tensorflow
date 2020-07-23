@@ -1,3 +1,5 @@
+#TODO: add random augmentation (random padding, random crop)
+
 # -*- coding: utf-8 -*-
 # Author: Antoine DELPLACE
 # Last update: 26/03/2020
@@ -13,7 +15,7 @@ Requirements
 
 Hyperparameters
 ----------
-- (width, height, input_channels) : input shape of one-hot chargrids
+- (width, height, bert_feature_size) : input shape of one-hot chargrids
 - base_channels : number of base channels for the neural network
 - (learning_rate, momentum) : parameters of the optimizer
 - weight_decay : coefficient used by the l2-regularizer
@@ -48,31 +50,30 @@ if gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
     except RuntimeError as e:
         print(e)
-from tensorflow.python.client import device_lib
 import matplotlib.pyplot as plt
 import os
 import time
 from skimage.transform import resize, rescale
+from tqdm import tqdm
+
+from data_loader import Generator
+from plot import plot_loss, plot_time
 
 ## Hyperparameters
-dir_np_chargrid_1h = "./data/output_ter/np_chargrids_1h/"
-dir_np_gt_1h = "./data/output_ter/np_gt_1h/"
-dir_np_bbox_anchor_mask = "./data/output_ter/np_bbox_anchor_mask/"
-dir_np_bbox_anchor_coord = "./data/output_ter/np_bbox_anchor_coord/"
 # dir_np_chargrid_1h = "./dummy_data/np_chargrids_1h/"
 # dir_np_gt_1h = "./dummy_data/np_gt_1h/"
 # dir_np_bbox_anchor_mask = "./dummy_data/np_bbox_anchor_mask/"
 # dir_np_bbox_anchor_coord = "./dummy_data/np_bbox_anchor_coord/"
-width = 128
-height = 256
-input_channels = 61
+DATA_DIR = '/hdd/namdng/ebar/Chargrid/dataset/data'
+width = 256
+height = 336
+bert_feature_size = 768
 base_channels = 64
 learning_rate = 0.05
 momentum = 0.9
 weight_decay = 0.1
 spatial_dropout = 0.1
-nb_classes = 5
-proba_classes = np.array([0.89096397, 0.01125766, 0.0504345, 0.03237164, 0.01497223]) #other, total, address, company, date
+nb_classes = 4
 constant_weight = 1.04
 nb_anchors = 4 # one per foreground class
 epochs = 1000
@@ -90,16 +91,11 @@ if not os.path.exists('./output'):
 
 np.random.seed(seed=seed)
 
-def print_hardware_configuration():
-    print(device_lib.list_local_devices())
-    print("Tensorflow version: ", tf.__version__)
-    print("Test GPU: ", tf.test.gpu_device_name())
-
 class Network(tf.keras.Model):
     def __init__(self):
         super(Network, self).__init__()
         ## Block z
-        self.z1 = tf.keras.layers.Conv2D(input_shape=(None, height, width, input_channels), filters=base_channels, kernel_size=3, strides=1, padding="same", kernel_initializer=tf.keras.initializers.he_uniform(), kernel_regularizer=tf.keras.regularizers.l2(l=weight_decay))
+        self.z1 = tf.keras.layers.Conv2D(input_shape=(None, height, width, bert_feature_size), filters=base_channels, kernel_size=3, strides=1, padding="same", kernel_initializer=tf.keras.initializers.he_uniform(), kernel_regularizer=tf.keras.regularizers.l2(l=weight_decay))
         self.z1_lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
         self.z1_bn = tf.keras.layers.BatchNormalization()
 
@@ -278,7 +274,7 @@ class Network(tf.keras.Model):
         self.d3 = tf.keras.layers.Conv2D(filters=nb_classes, kernel_size=3, strides=1, padding="same", kernel_initializer=tf.constant_initializer(value=1e-3), kernel_regularizer=tf.keras.regularizers.l2(l=weight_decay))
         self.d3_softmax = tf.keras.layers.Softmax()
         
-        
+        '''
         ## Block e
         self.e1 = tf.keras.layers.Conv2D(filters=base_channels, kernel_size=3, strides=1, padding="same", kernel_initializer=tf.keras.initializers.he_uniform(), kernel_regularizer=tf.keras.regularizers.l2(l=weight_decay))
         self.e1_lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
@@ -302,6 +298,7 @@ class Network(tf.keras.Model):
         self.f2_bn = tf.keras.layers.BatchNormalization()
         
         self.f3 = tf.keras.layers.Conv2D(filters=4*nb_anchors, kernel_size=3, strides=1, padding="same", kernel_initializer=tf.constant_initializer(value=1e-3), kernel_regularizer=tf.keras.regularizers.l2(l=weight_decay))
+        '''
 
 
     def call(self, input):
@@ -378,6 +375,7 @@ class Network(tf.keras.Model):
         x = self.d3(x)
         out_d = self.d3_softmax(x)
         
+        '''
         ## Decoder Bounding Box Regression
         concat_tab = [out_a_bis[1], out_a_bis[0]]
         x = out_a_bis[-1]
@@ -421,210 +419,111 @@ class Network(tf.keras.Model):
         x = self.f2_lrelu(x)
         x = self.f2_bn(x)
         out_f = self.f3(x)
+        '''
         
-        return out_d, out_e, out_f
+        # return out_d, out_e, out_f
+        return out_d
 
-def augment_data(data, tab_rand, order, shape, coord=False):
-    data_temp = resize(np.pad(data, ((tab_rand[1], tab_rand[3]), (tab_rand[0], tab_rand[2]), (0, 0)), 'constant'), shape, order=order, anti_aliasing=True)
-    
-    if coord:
-        for i in range(0, nb_anchors):
-            mask = (data_temp > 1e-6)[:, :, 4*i]
-            data_temp[mask, 4*i] *= shape[1]
-            data_temp[mask, 4*i] += tab_rand[0]
-            data_temp[mask, 4*i] /= (tab_rand[0]+shape[1]+tab_rand[2])
-            
-            data_temp[mask, 4*i+2] *= shape[1]
-            data_temp[mask, 4*i+2] += tab_rand[0]
-            data_temp[mask, 4*i+2] /= (tab_rand[0]+shape[1]+tab_rand[2])
-            
-            data_temp[mask, 4*i+1] *= shape[0]
-            data_temp[mask, 4*i+1] += tab_rand[1]
-            data_temp[mask, 4*i+1] /= (tab_rand[1]+shape[0]+tab_rand[3])
-            
-            data_temp[mask, 4*i+3] *= shape[0]
-            data_temp[mask, 4*i+3] += tab_rand[1]
-            data_temp[mask, 4*i+3] /= (tab_rand[1]+shape[0]+tab_rand[3])
-
-    return data_temp
-
-def extract_batch(dataset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range): # Data augmentation
-    if batch_size > len(dataset):
-        raise NameError('batch_size > len(dataset)')
-    np.random.shuffle(dataset)
-    
-    tab_rand = np.random.rand(batch_size, 4)*[pad_left_range*width, pad_top_range*height, pad_right_range*width, pad_bot_range*height]
-    tab_rand = tab_rand.astype(int)
-    
-    chargrid_input = []
-    seg_gt = []
-    anchor_mask_gt = []
-    anchor_coord_gt = []
-    
-    for i in range(0, batch_size):
-        data = np.load(os.path.join(dir_np_chargrid_1h, dataset[i]))
-        chargrid_input.append(augment_data(data, tab_rand[i], order=1, shape=(height, width, input_channels)))
-        
-        data = np.load(os.path.join(dir_np_gt_1h, dataset[i]))
-        seg_gt.append(augment_data(data, tab_rand[i], order=1, shape=(height, width, nb_classes)))
-        
-        data = np.load(os.path.join(dir_np_bbox_anchor_mask, dataset[i]))
-        anchor_mask_gt.append(augment_data(data, tab_rand[i], order=1, shape=(height, width, 2*nb_anchors)))
-        
-        data = np.load(os.path.join(dir_np_bbox_anchor_coord, dataset[i]))
-        anchor_coord_gt.append(augment_data(data, tab_rand[i], order=0, shape=(height, width, 4*nb_anchors), coord=True))
-        
-    return np.array(chargrid_input), np.array(seg_gt), np.array(anchor_mask_gt), np.array(anchor_coord_gt)
-
-def get_class_weights():
-    sample_weight_seg = np.ones((height, width, nb_classes))*1.0/np.log(constant_weight+proba_classes)
-
-    proba_classes_boxmask = np.repeat(proba_classes[1:], 2)
-    proba_classes_boxmask[np.arange(1, 2*nb_anchors, 2)] = 1-proba_classes[1:]
-    sample_weight_boxmask = np.ones((height, width, 2*nb_anchors))*1.0/np.log(constant_weight+proba_classes_boxmask)
-    
-    return sample_weight_seg, sample_weight_boxmask
-
-def initialize_network(sample_weight_seg, sample_weight_boxmask):
+def initialize_network():
     net = Network()
     
-    losses = {'output_1': tf.keras.losses.BinaryCrossentropy(), 'output_2': tf.keras.losses.BinaryCrossentropy(), 'output_3': tf.keras.losses.Huber()}
-    sample_weights = {'output_1': sample_weight_seg, 'output_2': sample_weight_boxmask}
+    # losses = {'output_1': tf.keras.losses.BinaryCrossentropy(), 'output_2': tf.keras.losses.BinaryCrossentropy(), 'output_3': tf.keras.losses.Huber()}
+    # losses = {'output_1': tf.keras.losses.BinaryCrossentropy()}
+    loss_fn = tf.keras.losses.BinaryCrossentropy()
     
-    net.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=momentum, nesterov=False), loss=losses, sample_weight=sample_weights)
-    net.build((None, height, width, input_channels))
+    net.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=learning_rate, momentum=momentum, nesterov=False), loss=loss_fn)
+    net.build((None, height, width, bert_feature_size))
     
     return net
 
-def get_train_test_sets(list_filenames):
-    np.random.shuffle(list_filenames)
-    
-    trainset = list_filenames[int(len(list_filenames)*prop_test):]
-    testset = list_filenames[:int(len(list_filenames)*prop_test)]
-    
-    return trainset, testset
-
-def compare_input_augmented_input(index_to_test, trainset, batch_chargrid, batch_seg, batch_mask, batch_coord):
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    ax1.imshow(np.apply_along_axis(np.argmax, axis=2, arr=np.load(os.path.join(dir_np_chargrid_1h, trainset[index_to_test]))))
-    ax2.imshow(np.apply_along_axis(np.argmax, axis=2, arr=batch_chargrid[index_to_test]))
-    plt.show()
-    plt.clf()
-
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    ax1.imshow(np.apply_along_axis(np.argmax, axis=2, arr=np.load(os.path.join(dir_np_gt_1h, trainset[index_to_test]))))
-    ax2.imshow(np.apply_along_axis(np.argmax, axis=2, arr=batch_seg[index_to_test]))
-    plt.show()
-    plt.clf()
-
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    ax1.imshow(np.load(os.path.join(dir_np_bbox_anchor_mask, trainset[index_to_test]))[:, :, 0])
-    ax2.imshow(batch_mask[index_to_test][:, :, 0])
-    plt.show()
-    plt.clf()
-
-    print(batch_coord[index_to_test][(batch_coord[index_to_test] > 1e-6)[:, :, 0], 0]*width)
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    ax1.imshow(np.load(os.path.join(dir_np_bbox_anchor_coord, trainset[index_to_test]))[:, :, 0])
-    ax2.imshow(batch_coord[index_to_test][:, :, 0])
-    plt.show()
-    plt.clf()
-
-def plot_loss(history_train, history_test, title, filename):
-    plt.figure(figsize=(8, 8))
-    plt.title(title)
-    plt.plot(history_train, label="loss")
-    plt.plot(history_test, label="val_loss")
-    plt.plot(np.argmin(history_test), np.min(history_test), marker="o", color="r", label="best model")
-    plt.xlabel("Epochs")
-    plt.ylabel("Loss")
-    plt.legend()
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig(filename, format="pdf")
-    plt.close()
-
-def plot_time(history_time, title, filename):
-    plt.figure(figsize=(8, 8))
-    plt.title(title)
-    plt.plot(history_time, label="time")
-    plt.xlabel("Epochs")
-    plt.ylabel("Time")
-    plt.legend()
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig(filename, format="pdf")
-    plt.close()
-
-def train(net, trainset, testset):
+def train(net, train_generator, test_generator):
     history_time_train = []
     history_loss = []
-    history_loss_output1 = []
-    history_loss_output2 = []
-    history_loss_output3 = []
+    # history_loss_output1 = []
+    # history_loss_output2 = []
+    # history_loss_output3 = []
 
     history_time_test = []
     history_val_loss = []
-    history_val_loss_output1 = []
-    history_val_loss_output2 = []
-    history_val_loss_output3 = []
+    # history_val_loss_output1 = []
+    # history_val_loss_output2 = []
+    # history_val_loss_output3 = []
     
     tps = time.time()
+    best_val_loss = 1000000000000
     for epoch in range(epochs):
+        print('_____EPOCH: {}'.format(epoch))
         #Training
-        tps_train = time.time()
-        batch_chargrid, batch_seg, batch_mask, batch_coord = extract_batch(trainset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range)
+        global_loss = []
+        for ite in tqdm(range(train_generator.num_batches)):
+            tps_train = time.time()
+            batch_bertgrid, batch_seg = train_generator.get_batch()
+            
+            # history = net.fit(x=batch_chargrid, y=[batch_seg, batch_mask, batch_coord])
+            history = net.fit(x=batch_bertgrid, y=batch_seg)
+            history_time_train.append(time.time()-tps_train)
+            global_loss.append(history.history["loss"])
+            # history_loss_output1.append(history.history["output_1_loss"])
+            # history_loss_output2.append(history.history["output_2_loss"])
+            # history_loss_output3.append(history.history["output_3_loss"])
         
-        history = net.fit(x=batch_chargrid, y=[batch_seg, batch_mask, batch_coord])
-        history_time_train.append(time.time()-tps_train)
-        history_loss.append(history.history["loss"])
-        history_loss_output1.append(history.history["output_1_loss"])
-        history_loss_output2.append(history.history["output_2_loss"])
-        history_loss_output3.append(history.history["output_3_loss"])
+        history_loss.append(np.mean(global_loss))
         
         #Validation
-        tps_test = time.time()
-        batch_chargrid, batch_seg, batch_mask, batch_coord = extract_batch(testset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range)
-        
-        history_val = net.evaluate(x=batch_chargrid, y=[batch_seg, batch_mask, batch_coord])
-        history_time_test.append(time.time()-tps_test)
-        history_val_loss.append(history_val[0])
-        history_val_loss_output1.append(history_val[1])
-        history_val_loss_output2.append(history_val[2])
-        history_val_loss_output3.append(history_val[3])
+        global_loss = []
+        for ite in tqdm(range(test_generator.num_batches)):
+            tps_test = time.time()
+            batch_bertgrid, batch_seg = test_generator.get_batch()
+            
+            # history_val = net.evaluate(x=batch_chargrid, y=[batch_seg, batch_mask, batch_coord])
+            history_val = net.evaluate(x=batch_bertgrid, y=batch_seg)
+            history_time_test.append(time.time()-tps_test)
+            global_loss.append(history_val[0])
+            # history_val_loss_output1.append(history_val[1])
+            # history_val_loss_output2.append(history_val[2])
+            # history_val_loss_output3.append(history_val[3])
+
+        history_val_loss.append(np.mean(global_loss))
+
+        if history_val_loss[-1] < best_val_loss:
+            net.save_weights(filename_backup.format(epoch))
+            best_val_loss = history_val[0]
+
+        ## Plot loss
+        plot_loss(history_loss, history_val_loss, "Global Loss", "./output/global_loss.pdf")
+        # plot_loss(history_loss_output1, history_val_loss_output1, "Output 1 Loss", "/hdd/ThanhTM/chargrid/output/output_1_loss.pdf")
+        # plot_loss(history_loss_output2, history_val_loss_output2, "Output 2 Loss", "/hdd/ThanhTM/chargrid/output/output_2_loss.pdf")
+        # plot_loss(history_loss_output3, history_val_loss_output3, "Output 3 Loss", "/hdd/ThanhTM/chargrid/output/output_3_loss.pdf")
+        # ## Plot time
+        # plot_time(history_time_train, "Train time", "/hdd/ThanhTM/chargrid/output/train_time.pdf")
+        # plot_time(history_time_test, "Test time", "/hdd/ThanhTM/chargrid/output/test_time.pdf")
     
-    return history_time_train, history_loss, history_loss_output1, history_loss_output2, history_loss_output3, history_time_test, history_val_loss, history_val_loss_output1, history_val_loss_output2, history_val_loss_output3, time.time()-tps
+    # return history_time_train, history_loss, history_loss_output1, history_loss_output2, history_loss_output3, history_time_test, history_val_loss, history_val_loss_output1, history_val_loss_output2, history_val_loss_output3, time.time()-tps
+    return history_time_train, history_loss, history_time_test, history_val_loss, time.time()-tps
 
 
 if __name__ == "__main__":
-    print_hardware_configuration()
+    train_generator = Generator(
+		data_dir=DATA_DIR,
+		data_split='training_data',
+		len_queue=10,
+		batch_size=4,
+		num_workers=2)
     
-    list_filenames = [f for f in os.listdir(dir_np_chargrid_1h) if os.path.isfile(os.path.join(dir_np_chargrid_1h, f))]
-    
-    trainset, testset = get_train_test_sets(list_filenames)
-    print("trainset: ", len(trainset), " - testset: ", len(testset))
-    
-    #batch_chargrid, batch_seg, batch_mask, batch_coord = extract_batch(trainset, batch_size, pad_left_range, pad_top_range, pad_right_range, pad_bot_range)
-    #compare_input_augmented_input(2, trainset, batch_chargrid, batch_seg, batch_mask, batch_coord)
-    
-    sample_weight_seg, sample_weight_boxmask = get_class_weights()
-    
-    net = initialize_network(sample_weight_seg, sample_weight_boxmask)
+    test_generator = Generator(
+		data_dir=DATA_DIR,
+		data_split='testing_data',
+		len_queue=10,
+		batch_size=4,
+		num_workers=2)
+
+    # start generator
+    train_generator.start()
+    test_generator.start()
+
+    net = initialize_network()
     #net.summary()
     
-    history_time_train, history_loss, history_loss_output1, history_loss_output2, history_loss_output3, history_time_test, history_val_loss, history_val_loss_output1, history_val_loss_output2, history_val_loss_output3, exec_time = train(net, trainset, testset)
+    history_time_train, history_loss, history_time_test, history_val_loss, exec_time = train(net, train_generator, test_generator)
+    
     print("Execution time = ", exec_time)
-    
-    net.save_weights(filename_backup)
-    
-    # TODO: move these into train() function
-    ## Plot loss
-    plot_loss(history_loss, history_val_loss, "Global Loss", "./output/global_loss.pdf")
-    plot_loss(history_loss_output1, history_val_loss_output1, "Output 1 Loss", "./output/output_1_loss.pdf")
-    plot_loss(history_loss_output2, history_val_loss_output2, "Output 2 Loss", "./output/output_2_loss.pdf")
-    plot_loss(history_loss_output3, history_val_loss_output3, "Output 3 Loss", "./output/output_3_loss.pdf")
-    
-    ## Plot time
-    plot_time(history_time_train, "Train time", "./output/train_time.pdf")
-    plot_time(history_time_test, "Test time", "./output/test_time.pdf")
-    
